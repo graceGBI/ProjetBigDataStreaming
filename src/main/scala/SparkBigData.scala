@@ -14,15 +14,15 @@ object SparkBigData {
   def maSessionSpark(Env : Boolean = true): SparkSession ={
     //en local on passe le nom de notre bin Hadoop
     // dans un cluster, la config de l'env est différente
-    if(Env == true){
+    if(Env){
       System.setProperty("hadoop.home.dir" ,"C:/hadoop")
-      ss= SparkSession.builder()
+      ss= SparkSession.builder
         .master("local[*]")
         .config("spark.sql.crossJoin.enabled","true")
         .enableHiveSupport()
         .getOrCreate()
     }else{
-      ss = SparkSession.builder()
+      ss = SparkSession.builder
         .appName("My first spark appli")
         .config("spark.serializer","org.apache.spark.serializer.KryoSerializer")
         .config("spark.sql.crossJoin.enabled","true")
