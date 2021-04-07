@@ -186,7 +186,7 @@ object KafkaStreaming {
       trace_kafka.info("La liste des paramètres pour la connexion du Producer Kafka sont :" + getKafkaProducerParams(kafkaBootstrapServers))
     } finally {
       println("n'oubliez pas de clôturer le Producer à la fin de son utilisation")
-      prodcucer_kafka.close()
+     // prodcucer_kafka.close() sera fait par le client qui l'appelle
     }
     return prodcucer_kafka
 
