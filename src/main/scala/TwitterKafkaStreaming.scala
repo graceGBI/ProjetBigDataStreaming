@@ -170,6 +170,9 @@ class TwitterKafkaStreaming {
 
     //le client Spark Streaming Twitter
     //Som est une spécification de scala qui permet de définir un paramètre optionel
+    //les données sont reçu par un receiver avant d'être enregistrer dans le RDD
+    //Donc en cas de panne, si on relance le système le receiver connait déjà les data déja lu
+    //Donc on est sur une sémantique "Exactement-Une-fois"
     val client_Streaming_Twitter = TwitterUtils.createStream(SparkBigData.getSparkStreamingContext(true, 15), Some(auth0), filtre)
     //micro batch de 15 secondes des RDD/ le workers de 15 secondes
 

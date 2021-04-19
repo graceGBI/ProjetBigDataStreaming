@@ -10,6 +10,7 @@ import org.apache.kafka.common.security.auth.SecurityProtocol
 import java.util.{Collections, Properties}
 import org.apache.kafka.clients.producer._
 import org.apache.log4j.{LogManager, Logger}
+import org.apache.spark.streaming.StreamingContext
 
 import java.time.Duration
 import java.util
@@ -38,6 +39,7 @@ object KafkaStreaming {
       "group.id"  -> kafkaConsumerGroupId,
       "zookeeper.hosts" -> kafkaZookeeper,
       "auto.offset.reset" -> kafkaConsumerReadOrder,
+      // à false c'est à nous de le gérer et à true non
       "enable.auto.commit" -> (false: java.lang.Boolean),
       "key.deserializer" -> classOf[StringDeserializer],
       "value.deserializer" -> classOf[StringDeserializer],
@@ -61,9 +63,9 @@ object KafkaStreaming {
    */
   def getConsommateurKafka(kafkaBootstrapServers : String, kafkaConsumerGroupId : String, ordre_lecture : String,
                            kafkaConsumerReadOrder : String, kafkaZookeeper : String , kerberosName : String,
-                           kafkaTopics : Array[String], batch_duration : Int) : InputDStream[ConsumerRecord[String,String]] = {
+                           kafkaTopics : Array[String], streamContext : StreamingContext) : InputDStream[ConsumerRecord[String,String]] = {
 
-    val ssc = SparkBigData.getSparkStreamingContext(true, batch_duration)
+    val ssc = streamContext
     kafkaParam=getKafkaSparkConsumerParams(kafkaBootstrapServers,kafkaConsumerGroupId,ordre_lecture,kafkaConsumerReadOrder,kafkaZookeeper,kerberosName)
 
     //c'est un ConsumerRecord mais de type InputDStream
@@ -71,6 +73,9 @@ object KafkaStreaming {
     //Ensuite il renvoie 3 infos : les data du topic, la partition où il recupère les data et l'offset
     var consummateurKafka: InputDStream[ConsumerRecord[String, String]] = null
     try{
+      //Les données reçues par kafka arrivent directement dans le RDD
+      // Donc sans passer par un receiver donc on est sur une sémantique de livraison Au-Moins-Une-Fois
+      // Donc au cas d'erreur, si on relance l'appli on peut relire les mêmes données plusieurs fois
       consummateurKafka =  KafkaUtils.createDirectStream[String,String](
         ssc,
         PreferConsistent,
