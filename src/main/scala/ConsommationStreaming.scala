@@ -1,10 +1,11 @@
-import ConsommationStreaming.schema_Kafka
+
 import org.apache.log4j.{LogManager, Logger}
 import KafkaStreaming._
 import SparkBigData._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{col, from_json}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
+import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.kafka010.{CanCommitOffsets, HasOffsetRanges}
 
 object ConsommationStreaming {
@@ -17,6 +18,7 @@ object ConsommationStreaming {
   val kerberosName : String = ""
   val batch_duration : Int =15
   val topics : Array[String] = Array("")
+  val chekpointChemin : String = "/Hadoop/mhgb/datalake/"
   val scc = getSparkStreamingContext(true, batch_duration)
 
   private var trace_consommation : Logger = LogManager.getLogger("Log_Console")
@@ -28,9 +30,30 @@ object ConsommationStreaming {
     StructField("State", StringType, true)
   ))
 
-  def main(args: Array[String]): Unit = {
+  /**
+   * checkpointing avec Spark Streaming
+   * @param checkpointPath : chemin d'enregistrement du checkpoint
+   * @return : context spark streaming avec prise en compte du checkpoint
+   */
+  def fault_tolerant_SparkStreamingContext (checkpointPath : String) : StreamingContext = {
 
-    val kafkaStreams = getConsommateurKafka(bootstrapServers,consumerGroupId,ordre_lecture,consumerReadOrder,zookeeper,kerberosName,topics, scc)
+    val ssc2 = getSparkStreamingContext(true, batch_duration)
+
+    val kafkaStreams_cp = getConsommateurKafka(bootstrapServers, consumerGroupId, consumerReadOrder, zookeeper, kerberosName, topics, ssc2)
+
+    ssc2.checkpoint(checkpointPath)
+
+    return ssc2
+
+  }
+  def main(args: Array[String]): Unit = {
+    persister_in_queue_kafka ()
+
+  }
+
+  def persister_in_queue_kafka () : Unit ={
+
+    val kafkaStreams = getConsommateurKafka(bootstrapServers,consumerGroupId,consumerReadOrder,zookeeper,kerberosName,topics, scc)
 
     // on a toutes les méthodes des RDD, le kafkastream contient les consumerecord
     //1ère méthode : lecture simple des données, elle n'implique aucune gestion de l'offset
@@ -72,11 +95,11 @@ object ConsommationStreaming {
           // 2 ème méthode d'exploitation du Data Frame et SQL avec Kafka
           val df_eventsKafka_2 = df_kafka.withColumn("tweet_message", from_json(col("tweet_message"), schema_Kafka))
             .select(col("tweet_message.*"))
-        /*OU
-          val df_eventsKafka_2 = df_kafka.withColumn("tweet_message", from_json(col("tweet_message"), schema_Kafka))
-            .select(col("tweet_message.Zipcode"))
-            .select(col("tweet_message.ZipcodeType"))
-            .select(col("tweet_message.State"))**/
+          /*OU
+            val df_eventsKafka_2 = df_kafka.withColumn("tweet_message", from_json(col("tweet_message"), schema_Kafka))
+              .select(col("tweet_message.Zipcode"))
+              .select(col("tweet_message.ZipcodeType"))
+              .select(col("tweet_message.State"))**/
 
           // sémantique de livraison et de traitement exactement une fois. Persistance des offsets dans Kafka à la fin du traitement
           trace_consommation.info("persistance des offsets dans Kafka encours....")
@@ -90,6 +113,61 @@ object ConsommationStreaming {
 
     scc.start()
     scc.awaitTermination()
+  }
+
+  def execution_checkPoint () : Unit = {
+
+    val ssc_cp = StreamingContext.getOrCreate(chekpointChemin, () => fault_tolerant_SparkStreamingContext(chekpointChemin))
+
+    val kafkaStreams_cp = getConsommateurKafka(bootstrapServers, consumerGroupId, consumerReadOrder, zookeeper, kerberosName, topics, ssc_cp)
+
+    kafkaStreams_cp.checkpoint(Seconds(15))
+
+    kafkaStreams_cp.foreachRDD {
+
+      rddKafka => {
+        if (!rddKafka.isEmpty()) {
+
+          val dataStreams = rddKafka.map(record => record.value())
+
+          val ss = SparkSession.builder.config(rddKafka.sparkContext.getConf).enableHiveSupport.getOrCreate()
+          import ss.implicits._
+
+          val df_kafka = dataStreams.toDF("tweet_message")
+
+          val df_eventsKafka_2 = df_kafka.withColumn("tweet_message", from_json(col("tweet_message"), schema_Kafka))
+            .select(col("tweet_message.*"))
+
+        }
+
+      }
+
+    }
+
+    ssc_cp.start()
+    ssc_cp.awaitTermination()
 
   }
+
+  /**
+   * La fonction streaming. Si on déploie notre application c'est OK. Le reste ce sont des traitements
+   * Le micro batch est déclencher par le SparkStreamingContext avec son batchduration
+   */
+  def streamingCas () : Unit = {
+
+    val ssc = getSparkStreamingContext(true, batch_duration)
+
+    //on ajoute les traitements que l'on souhaite, kafka et autres
+    //Kafka fait du pull, il est à l'écoute de la source streaming dès qu'un evt arrive il le recupère
+    //Par contre Spark non, il ne vas pas récupérer les data, on doit les lui envoyer.
+    // A grande échelle (des centaines de milliers et plus,..) si le débit des évt est trop importantes
+    // ou que la source streaming RGBD Salesforce dans notre cas n'arrive pas à supporter le niveau de parallélisme,
+    // la charge de calcul, le nbre de user connecté dans Spark.
+    //Donc c'est mieux d'avoir un système d'ingestion streaming.
+
+    ssc.start()
+    ssc.awaitTermination()
+
+  }
+
 }

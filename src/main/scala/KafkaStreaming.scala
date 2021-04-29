@@ -1,3 +1,4 @@
+import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import org.apache.kafka.common.serialization.StringDeserializer
 import org.apache.spark.streaming.dstream.InputDStream
 import org.apache.spark.streaming.kafka010.KafkaUtils
@@ -31,8 +32,8 @@ object KafkaStreaming {
    * @param kerberosName : le nom du service Kerberos
    * @return: la fonction renvoie une table clé-valeur des paramètres de connexion à un cluster Kafka spécifique
    */
-  def getKafkaSparkConsumerParams(kafkaBootstrapServers : String, kafkaConsumerGroupId : String, ordre_lecture : String,
-                     kafkaConsumerReadOrder : String, kafkaZookeeper : String , kerberosName : String): Map[String, Object] ={
+  def getKafkaSparkConsumerParams(kafkaBootstrapServers : String, kafkaConsumerGroupId : String, kafkaConsumerReadOrder : String,
+                                  kafkaZookeeper : String , kerberosName : String): Map[String, Object] ={
 
     kafkaParam = Map(
       "bootstrap.servers" -> kafkaBootstrapServers,
@@ -61,12 +62,12 @@ object KafkaStreaming {
    * @param batch_duration
    * @return
    */
-  def getConsommateurKafka(kafkaBootstrapServers : String, kafkaConsumerGroupId : String, ordre_lecture : String,
-                           kafkaConsumerReadOrder : String, kafkaZookeeper : String , kerberosName : String,
+  def getConsommateurKafka(kafkaBootstrapServers : String, kafkaConsumerGroupId : String, kafkaConsumerReadOrder : String,
+                           kafkaZookeeper : String , kerberosName : String,
                            kafkaTopics : Array[String], streamContext : StreamingContext) : InputDStream[ConsumerRecord[String,String]] = {
 
     val ssc = streamContext
-    kafkaParam=getKafkaSparkConsumerParams(kafkaBootstrapServers,kafkaConsumerGroupId,ordre_lecture,kafkaConsumerReadOrder,kafkaZookeeper,kerberosName)
+    kafkaParam=getKafkaSparkConsumerParams(kafkaBootstrapServers,kafkaConsumerGroupId,kafkaConsumerReadOrder,kafkaZookeeper,kerberosName)
 
     //c'est un ConsumerRecord mais de type InputDStream
     //Souscrire à kakfa, récupère les données du topic1 dans le cluster kafka via les infos paramétrées
@@ -163,6 +164,25 @@ object KafkaStreaming {
     props.put("security.protocol",  "SASL_PLAINTEXT")
 
     return props
+  }
+
+
+  def getKafkaProducerParams_exactly_once (KafkaBootStrapServers : String) : Properties = {
+    val props : Properties = new Properties()
+    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+    props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KafkaBootStrapServers)
+    props.put("security.protocol",  "SASL_PLAINTEXT")
+    //propriétés pour rendre le producer Exactly-Once
+    props.put(ProducerConfig.ACKS_CONFIG,  "all")
+    // pour la cohérence éventuelle. Doit être inférieur ou égal au facteur de réplication du topic dans lequel vous allez publier
+    props.put("min.insync.replicas", "2")
+    //rendre le producer idempotent
+    props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true")
+    props.put(ProducerConfig.RETRIES_CONFIG, "3")
+    props.put("max.in.flight.requests.per.connection", "3")
+
+    return props
 
   }
 
@@ -179,7 +199,10 @@ object KafkaStreaming {
     val prodcucer_kafka = new KafkaProducer[String,String](getKafkaProducerParams(kafkaBootstrapServers))
 
     trace_kafka.info(s"message à publier dans le topic ${topic_name}, ${message}")
-    val record_publish = new ProducerRecord[String, String](topic_name, message)
+    val cle : String = "1" //pour que kafka regroupe tous les messages de cet id dans le même topic
+                          // on peut déclarer la clé au niveau des paramètres, afin de créer des clé différentes
+                          // par messsage au niveau de l'application pour notre cas d'usage c'est Twitter
+    val record_publish = new ProducerRecord[String, String](topic_name,cle, message)
 
     try{
       trace_kafka.info("publication du message")
@@ -197,7 +220,60 @@ object KafkaStreaming {
 
   }
 
+  def getJSON(topic_name : String) : ProducerRecord[String, String] ={
+    val objet_json = JsonNodeFactory.instance.objectNode()
 
+    val price : Int = 45
+
+    objet_json.put("orderid", "")
+    objet_json.put("customerid", "")
+    objet_json.put("campaignid", "")
+    objet_json.put("orderdate", "")
+    objet_json.put("city", "")
+    objet_json.put("state", "")
+    objet_json.put("zipcode", "")
+    objet_json.put("paymenttype", "CB")
+    objet_json.put("totalprice", price)
+    objet_json.put("numorderlines", 200)
+    objet_json.put("numunit",10)
+
+    println("L'objet JSON est : %s".format(objet_json.toString))
+
+    return  new ProducerRecord[String, String](topic_name,objet_json.toString)
+  }
+
+ def getProducerKafka_exactly_once(kafkaBootstrapServers : String,topic_name : String, message : String) : KafkaProducer[String,String]={
+   trace_kafka.info(s"instanciation d'une instance du producer Kafka aux serveurs :  ${kafkaBootstrapServers}")
+   val prodcucer_kafka = new KafkaProducer[String,String](getKafkaProducerParams_exactly_once(kafkaBootstrapServers))
+
+   trace_kafka.info(s"message à publier dans le topic ${topic_name}, ${message}")
+
+   val record_publish = getJSON(topic_name)
+
+   try{
+     trace_kafka.info("publication du message")
+     prodcucer_kafka.send(record_publish,new Callback {
+       override def onCompletion(metadata: RecordMetadata, exception: Exception): Unit = {
+         if (exception == null) {
+           //le message a été enregistré dans Kafka sans problème. Je peux récupérer les infos envoyées
+           trace_kafka.info("offset du message : " + metadata.offset().toString)
+           trace_kafka.info("topic du message : " + metadata.topic().toString())
+           trace_kafka.info("partition du message : " + metadata.partition().toString())
+           trace_kafka.info("heure d'enregistrement du message : " + metadata.timestamp())
+         }
+       }
+     })
+     trace_kafka.info("message publié avec succès ! :)")
+   }catch {
+     case ex: Exception =>
+       trace_kafka.error(s"erreur dans la publication du message dans Kafka ${ex.printStackTrace()}")
+       trace_kafka.info("La liste des paramètres pour la connexion du Producer Kafka sont :" + getKafkaProducerParams_exactly_once(kafkaBootstrapServers))
+   } finally {
+     println("n'oubliez pas de clôturer le Producer à la fin de son utilisation")
+     // prodcucer_kafka.close() sera fait par le client qui l'appelle
+   }
+   return prodcucer_kafka
+ }
 
 
 }
