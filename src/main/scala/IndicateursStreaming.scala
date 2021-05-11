@@ -11,7 +11,7 @@ import org.apache.spark.streaming.kafka010.{CanCommitOffsets, HasOffsetRanges}
 
 object IndicateursStreaming {
 
-  val  schema_indicateurs = StructType(Array(
+  val  schema_indicateurs: StructType = StructType(Array(
     StructField("event_date", DateType, true),
     StructField("id", StringType, false),
     StructField("text", StringType, true),
@@ -64,10 +64,10 @@ object IndicateursStreaming {
             if (events_df.count() == 0) {
 
               Seq(
-                ("Aucun évenement n'a été receptionné dans le quart d'heure")
+                "Aucun évenement n'a été receptionné dans le quart d'heure"
               ).toDF("libellé")
                 .coalesce(1) //coalesce ou repartition : regrouper tous les fichiers en 1 seule car chaque noeud du cluster spark traite chaque partie de la requête
-                //donc lorsque chak noeud aura fini de traiter sa partie ils renvoient chaque bout à la fin du traitement au driver qui va fusionner en 1 seul fichier
+                //donc lorsque chak noeud aura fini de traiter sa partie ils renvoient chaque bout à la fin du traitement au driver(machine principal) qui va fusionner en 1 seul fichier
                 //sur des fichier volumineux vaux mieux faire le repartiion
                 .write //write pour l'écriture,
                 .format("com.databricks.spark.csv")
